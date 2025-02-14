@@ -1,5 +1,21 @@
 import numpy as np
 
+def split_contents(contents, np_rng):
+    try:
+        # A boundary can be =0 (prefix will be empty)
+        # a boundary can be =len(contents) (suffix will be empty)
+        # The two boundaries can be equal (middle will be empty)
+        boundaries = list(np_rng.randint(low=0, high=len(contents) + 1, size=2))
+        boundaries.sort()
+    except ValueError as e:
+        print(len(contents), contents)
+        print(e)
+        raise e
+
+    prefix = contents[: boundaries[0]]
+    middle = contents[boundaries[0] : boundaries[1]]
+    suffix = contents[boundaries[1] :]
+    return [prefix, middle, suffix, np_rng]
 
 # Adapted from https://github.com/bigcode-project/Megatron-LM/blob/6c4bf908df8fd86b4977f54bf5b8bd4b521003d1/megatron/data/gpt_dataset.py#L491
 def permute_char_level(
@@ -19,27 +35,17 @@ def permute_char_level(
     Maintain the same sample length (if transform creates a few extra tokens, drop them).
     """
 
+    # 对 fim_rate 比例的 data 内容进行 fim 切分， OpenAI 论文经验值为 0.9
     if np_rng.binomial(1, fim_rate):  # sample bernoulli dist
 
+        # 这里 decode 了输入的 token 序列，而后进行了 char level 的 fim 划分
         contents = tokenizer.decode(sample, skip_special_tokens=True)
-
-        try:
-            # A boundary can be =0 (prefix will be empty)
-            # a boundary can be =len(contents) (suffix will be empty)
-            # The two boundaries can be equal (middle will be empty)
-            boundaries = list(np_rng.randint(low=0, high=len(contents) + 1, size=2))
-            boundaries.sort()
-        except ValueError as e:
-            print(len(contents), contents)
-            print(e)
-            raise e
-
-        prefix = contents[: boundaries[0]]
-        middle = contents[boundaries[0] : boundaries[1]]
-        suffix = contents[boundaries[1] :]
+        [prefix, middle, suffix, np_rng] = split_contents(contents, np_rng)
 
         # By adding and removing the <MID> token, we ensure that the tokenizer doesn't add extra leading whitespace
         # The prefix whitespace doesn't matter as also mentioned in the Code Llama paper
+        # L-TODO: 论文提及的 special_token，用于优化输出内容格式？ 还没搞明白原理
+        # 不过在模型应用场景中，应该也需要在生成prompt时添加该 sp token吧
         special_token = "▔"
         special_token_id = tokenizer.encode(
             special_token, add_special_tokens=False, return_tensors="np"
@@ -79,8 +85,11 @@ def permute_char_level(
             elif diff < 0:  # too short
                 suffix = np.concatenate([suffix, np.full((-1 * diff), pad_tok_id)])
 
+        # format 为 SPM or PSM 格式， 据 OpenAI 论文， 50-50 的 PSM 和 SPM 混训效果较好
         if np_rng.binomial(1, fim_spm_rate):
             # SPM
+            # 此处好像是根据 OpenAI 论文使用的 SPM 格式: <PRE> <SUF> {suffix} <MID> <prefix> <middle> <EOT>
+            # magic format? why??
             new_sample = np.concatenate(
                 [
                     [prefix_tok_id, suffix_tok_id],
