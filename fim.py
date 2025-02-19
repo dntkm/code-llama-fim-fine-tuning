@@ -1,6 +1,47 @@
 import numpy as np
+import re
+import random
 
-def split_contents(contents, np_rng):
+def file_preprocess(file_content, max_length):
+    import_index = file_content.find('#import')
+
+    if import_index != -1:
+        start_part = file_content[:import_index]
+        pattern = r'^//.*\n'
+        new_start_part = re.sub(pattern, '', start_part, flags=re.MULTILINE)
+
+        new_content = new_start_part + file_content[import_index:]
+    
+    pattern = r'#import\s+(["<])(.*?)(.h[">])'
+    matches = re.findall(pattern, file_content)
+
+    filenames = list(set([match[1] for match in matches]))
+    filenames_str = random_string_concatenation(filenames, max_length)
+    return new_content, filenames_str
+
+def random_string_concatenation(str_list, max_length):
+    str_list_sorted = sorted(str_list, key=lambda x: len(x))
+        
+    remaining_length = max_length
+    result = []
+    list_index = list(range(len(str_list_sorted)))
+    while len(list_index) and len(str_list_sorted[list_index[-1]]) > remaining_length:
+        list_index.pop()
+        
+    
+    while len(list_index) and remaining_length > 0:
+        random_index = random.randint(0, len(list_index) - 1)
+        random_string = str_list_sorted[list_index[random_index]]
+        result.append(random_string)
+        remaining_length = remaining_length - len(random_string)
+        
+        list_index.remove(list_index[random_index])
+        while len(list_index) and len(str_list_sorted[list_index[-1]]) > remaining_length:
+            list_index.pop()
+
+    return " ".join(result)
+
+def split_contents(index, contents, np_rng, showInfo):
     try:
         # A boundary can be =0 (prefix will be empty)
         # a boundary can be =len(contents) (suffix will be empty)
