@@ -41,7 +41,7 @@ def random_string_concatenation(str_list, max_length):
 
     return " ".join(result)
 
-def split_contents(index, contents, np_rng, showInfo):
+def split_contents(contents, np_rng):
     try:
         # A boundary can be =0 (prefix will be empty)
         # a boundary can be =len(contents) (suffix will be empty)
@@ -61,6 +61,7 @@ def split_contents(index, contents, np_rng, showInfo):
 # Adapted from https://github.com/bigcode-project/Megatron-LM/blob/6c4bf908df8fd86b4977f54bf5b8bd4b521003d1/megatron/data/gpt_dataset.py#L491
 def permute_char_level(
     sample,
+    dependencies,
     np_rng,
     fim_rate,
     fim_spm_rate,
@@ -94,7 +95,7 @@ def permute_char_level(
         special_token_id_len = special_token_id.shape[0]
 
         prefix = tokenizer.encode(
-            prefix, add_special_tokens=False, return_tensors="np"
+            dependencies + prefix, add_special_tokens=False, return_tensors="np"
         )[0]
         middle = tokenizer.encode(
             special_token + middle, add_special_tokens=False, return_tensors="np"

@@ -31,6 +31,7 @@ class ConstantLengthDataset(IterableDataset):
         dataset,
         infinite=False,
         seq_length=1024,
+        dependencies_length_max_rate=0.1,
         num_of_sequences=1024,
         chars_per_token=3.6,
         content_field="content",
@@ -46,6 +47,7 @@ class ConstantLengthDataset(IterableDataset):
         )[0]
         self.dataset = dataset
         self.seq_length = seq_length
+        self.dependencies_length_max_rate = dependencies_length_max_rate
         self.infinite = infinite
         self.current_size = 0
         self.chunked_samples = 0
@@ -64,6 +66,8 @@ class ConstantLengthDataset(IterableDataset):
         self.prefix_tok_id = self.tokenizer.prefix_id
         self.middle_tok_id = self.tokenizer.middle_id
         self.pad_tok_id = 0
+        self.dependencies_seq_length = self.seq_length * self.dependencies_length_max_rate
+        self.content_seq_length = self.seq_length - self.dependencies_seq_length
 
     def __iter__(self):
         iterator = iter(self.dataset)
@@ -77,23 +81,24 @@ class ConstantLengthDataset(IterableDataset):
                     break
                 try:
                     document = next(iterator)[self.content_field]
+                    document_content, document_dependencies = fim.file_preprocess(document, self.dependencies_seq_length)
 
                     if np_rng.binomial(1, 1 - DOCUMENT_SPLIT_RATE):
-                        buffer.append(document)
-                        buffer_len += len(document)
+                        buffer.append(document_content)
+                        buffer_len += len(document_content)
                         print(f"Added document to buffer. Total length: {buffer_len}")
                         continue
 
                     old_num_chunks = len(buffer)
                     chunk_num = 0
 
-                    while len(document) > 0:
+                    while len(document_content) > 0:
                         chunk_len = np_rng.randint(
-                            round(self.seq_length * 0.8) * self.chars_per_token,
-                            round(self.seq_length * 1.2) * self.chars_per_token,
+                            round(self.content_seq_length * 0.8) * self.chars_per_token,
+                            round(self.content_seq_length * 1.2) * self.chars_per_token,
                         )
-                        buffer.append(document[:chunk_len])
-                        document = document[chunk_len:]
+                        buffer.append(document_content[:chunk_len])
+                        document_content = document_content[chunk_len:]
                         chunk_num += 1
                         buffer_len += len(buffer[-1])
                         if buffer_len >= self.max_buffer_size:
@@ -144,6 +149,7 @@ class ConstantLengthDataset(IterableDataset):
                                     # permute {prefix, suffix, middle} or {suffix, prefix, middle}
                                     permuted, np_rng = fim.permute_char_level(
                                         sample[curr_start_position:loc],
+                                        document_dependencies,
                                         np_rng,
                                         self.fim_rate,
                                         self.fim_spm_rate,
@@ -175,6 +181,7 @@ class ConstantLengthDataset(IterableDataset):
                             old_sample_length = sample.shape[0]
                             permuted, np_rng = fim.permute_char_level(
                                 sample,
+                                document_dependencies,
                                 np_rng,
                                 self.fim_rate,
                                 self.fim_spm_rate,
