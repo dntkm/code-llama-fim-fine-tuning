@@ -1,7 +1,7 @@
 import traceback
 import numpy as np
 from torch.utils.data import IterableDataset
-import fim
+import file_utils
 import functools
 import torch
 import random
@@ -32,6 +32,7 @@ class ConstantLengthDataset(IterableDataset):
         infinite=False,
         seq_length=1024,
         dependencies_length_max_rate=0.1,
+        dependencies_on_prefix=True,
         num_of_sequences=1024,
         chars_per_token=3.6,
         content_field="content",
@@ -48,6 +49,7 @@ class ConstantLengthDataset(IterableDataset):
         self.dataset = dataset
         self.seq_length = seq_length
         self.dependencies_length_max_rate = dependencies_length_max_rate
+        self.dependencies_on_prefix = dependencies_on_prefix
         self.infinite = infinite
         self.current_size = 0
         self.chunked_samples = 0
@@ -80,8 +82,8 @@ class ConstantLengthDataset(IterableDataset):
                 if buffer_len >= self.max_buffer_size:
                     break
                 try:
-                    document = next(iterator)[self.content_field]
-                    document_content, document_dependencies = fim.file_preprocess(document, self.dependencies_seq_length)
+                    document = file_utils.remove_comments(next(iterator)[self.content_field])
+                    document_dependencies, document_content = file_utils.split_file(document)
 
                     if np_rng.binomial(1, 1 - DOCUMENT_SPLIT_RATE):
                         buffer.append(document_content)
@@ -147,9 +149,11 @@ class ConstantLengthDataset(IterableDataset):
                                 # Only permute non-empty segments.
                                 if loc - curr_start_position > 0:
                                     # permute {prefix, suffix, middle} or {suffix, prefix, middle}
-                                    permuted, np_rng = fim.permute_char_level(
+                                    permuted, np_rng = file_utils.permute_char_level(
                                         sample[curr_start_position:loc],
                                         document_dependencies,
+                                        self.dependencies_seq_length,
+                                        self.dependencies_on_prefix,
                                         np_rng,
                                         self.fim_rate,
                                         self.fim_spm_rate,
@@ -179,9 +183,11 @@ class ConstantLengthDataset(IterableDataset):
                         else:
                             self.whole_samples += 1
                             old_sample_length = sample.shape[0]
-                            permuted, np_rng = fim.permute_char_level(
+                            permuted, np_rng = file_utils.permute_char_level(
                                 sample,
                                 document_dependencies,
+                                self.dependencies_seq_length,
+                                self.dependencies_on_prefix,
                                 np_rng,
                                 self.fim_rate,
                                 self.fim_spm_rate,

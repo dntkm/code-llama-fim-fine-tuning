@@ -2,44 +2,66 @@ import numpy as np
 import re
 import random
 
-def file_preprocess(file_content, max_length):
-    import_index = file_content.find('#import')
+def remove_comments(file_content):
+    # 单行注释
+    single_line_pattern = r'//.*$'
+    new_content = re.sub(single_line_pattern, '', file_content, flags=re.MULTILINE)
 
-    if import_index != -1:
-        start_part = file_content[:import_index]
-        pattern = r'^//.*\n'
-        new_start_part = re.sub(pattern, '', start_part, flags=re.MULTILINE)
-
-        new_content = new_start_part + file_content[import_index:]
+    # 多行注释
+    multi_line_pattern = r'/\*.*?\*/'
+    new_content = re.sub(multi_line_pattern, '', new_content, flags=re.DOTALL)
     
+    return new_content
+
+def split_file(file_content):
+    # 获取依赖的文件名
     pattern = r'#import\s+(["<])(.*?)(.h[">])'
     matches = re.findall(pattern, file_content)
 
     filenames = list(set([match[1] for match in matches]))
-    filenames_str = random_string_concatenation(filenames, max_length)
-    return new_content, filenames_str
 
-def random_string_concatenation(str_list, max_length):
-    str_list_sorted = sorted(str_list, key=lambda x: len(x))
-        
-    remaining_length = max_length
-    result = []
-    list_index = list(range(len(str_list_sorted)))
-    while len(list_index) and len(str_list_sorted[list_index[-1]]) > remaining_length:
-        list_index.pop()
-        
+    # 获取content
+    new_content = re.sub(r'^#import.*$', '', file_content, flags=re.MULTILINE)
     
-    while len(list_index) and remaining_length > 0:
-        random_index = random.randint(0, len(list_index) - 1)
-        random_string = str_list_sorted[list_index[random_index]]
-        result.append(random_string)
-        remaining_length = remaining_length - len(random_string)
-        
-        list_index.remove(list_index[random_index])
-        while len(list_index) and len(str_list_sorted[list_index[-1]]) > remaining_length:
-            list_index.pop()
+    # 删除连续的换行符
+    new_content = re.sub(r'\n{2,}', '\n', new_content)
+    return sorted(filenames, key=lambda x: len(x)), new_content
 
-    return " ".join(result)
+def get_random_file_dependencies_by_max_length(dependencies, max_length):
+    result = []
+    remaining_length = max_length
+    list_index = list(range(len(dependencies)))
+    total_length = sum([len(name) for name in dependencies]) + len(dependencies) - 1
+    
+    # 尾部文件名超长
+    while len(list_index) and len(dependencies[list_index[-1]]) > remaining_length:
+        total_length = total_length - len(dependencies[list_index[-1]]) - 1
+        list_index.pop()
+    
+    while len(list_index) and remaining_length > 0 and total_length > remaining_length:
+        # 获取随机头文件名
+        random_index = random.randint(0, len(list_index) - 1)
+        random_string = dependencies[list_index[random_index]]
+        
+        result.append(random_string)
+        remaining_length = remaining_length - len(random_string) - 1
+        total_length = total_length - len(random_string) - 1
+        
+        # 处理可用index 以及 剩下的文件名总长
+        list_index.remove(list_index[random_index])
+        while len(list_index) and len(dependencies[list_index[-1]]) > remaining_length:
+            total_length = total_length - len(dependencies[list_index[-1]]) - 1
+            list_index.pop()
+    
+    # 剩余文件名可以全部放入
+    if total_length <= remaining_length and len(list_index):
+        result += dependencies[:list_index[-1]+1]
+    
+    result = list(set(result))
+    random.shuffle(result)
+    result_str = " ".join(set(result))
+    assert len(result_str) <= max_length, "Warning: dependency string length exceeded."
+    return result_str
 
 def split_contents(contents, np_rng):
     try:
@@ -62,6 +84,8 @@ def split_contents(contents, np_rng):
 def permute_char_level(
     sample,
     dependencies,
+    dependencies_max_length,
+    dependencies_on_prefix,
     np_rng,
     fim_rate,
     fim_spm_rate,
@@ -79,10 +103,22 @@ def permute_char_level(
 
     # 对 fim_rate 比例的 data 内容进行 fim 切分， OpenAI 论文经验值为 0.9
     if np_rng.binomial(1, fim_rate):  # sample bernoulli dist
-
+        # 获取满足max_length的随机file_dependencies
+        random_dependencies = get_random_file_dependencies_by_max_length(dependencies, dependencies_max_length)
+        
+        # format 为 SPM or PSM 格式， 据 OpenAI 论文， 50-50 的 PSM 和 SPM 混训效果较好
+        use_PSM = np_rng.binomial(1, fim_spm_rate)
+        
         # 这里 decode 了输入的 token 序列，而后进行了 char level 的 fim 划分
         contents = tokenizer.decode(sample, skip_special_tokens=True)
         [prefix, middle, suffix, np_rng] = split_contents(contents, np_rng)
+        
+        # dependencies_on_prefix = True  则将prefix固定在prefix前
+        # dependencies_on_prefix = False 则将prefix固定在整个结构前
+        if use_PSM or dependencies_on_prefix:
+            prefix = random_dependencies + prefix
+        else:
+            suffix = random_dependencies + suffix
 
         # By adding and removing the <MID> token, we ensure that the tokenizer doesn't add extra leading whitespace
         # The prefix whitespace doesn't matter as also mentioned in the Code Llama paper
@@ -95,7 +131,7 @@ def permute_char_level(
         special_token_id_len = special_token_id.shape[0]
 
         prefix = tokenizer.encode(
-            dependencies + prefix, add_special_tokens=False, return_tensors="np"
+            random_dependencies + prefix, add_special_tokens=False, return_tensors="np"
         )[0]
         middle = tokenizer.encode(
             special_token + middle, add_special_tokens=False, return_tensors="np"
@@ -127,8 +163,7 @@ def permute_char_level(
             elif diff < 0:  # too short
                 suffix = np.concatenate([suffix, np.full((-1 * diff), pad_tok_id)])
 
-        # format 为 SPM or PSM 格式， 据 OpenAI 论文， 50-50 的 PSM 和 SPM 混训效果较好
-        if np_rng.binomial(1, fim_spm_rate):
+        if not use_PSM:
             # SPM
             # 此处好像是根据 OpenAI 论文使用的 SPM 格式: <PRE> <SUF> {suffix} <MID> <prefix> <middle> <EOT>
             # magic format? why??
